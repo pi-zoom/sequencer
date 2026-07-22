@@ -496,6 +496,8 @@ void init_osc(){
 
 int start(void)
 {
+    std::cout << "Init Jack" << std::endl;
+
     int i, err;
     m_jack_client = jack_client_open("sequencer", JackNullOption, NULL);
     if (m_jack_client == NULL)
@@ -562,6 +564,8 @@ int start(void)
     jack_transport_locate(m_jack_client, 0);
     jack_transport_start(m_jack_client);
 
+    std::cout << "Jack initialized" << std::endl;
+
     return 0;
 }
 
@@ -592,8 +596,10 @@ int main(int argc, char **argv)
     signal(SIGINT, signal_callback);
 
     init_osc();
-    if(start() != 0)
-        return -1;
+    while(start() != 0)
+    {
+        sleep(2);
+    }
 
     std::thread pos_thread(position_thread);
     while (!stopping)
