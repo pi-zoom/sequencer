@@ -24,6 +24,9 @@ using namespace smf;
 #define JACK_SYSTEM_PLAYBACK_L      "system:playback_1"
 #define JACK_SYSTEM_PLAYBACK_R      "system:playback_2"
 
+#define SOUND_FONT                  "/home/marius/Téléchargements/studio_dubroom_general_midi.sf2"
+// #define SOUND_FONT                  "/usr/share/sounds/sf2/FluidR3_GM.sf2"
+
 // midi file
 MidiFile midifile;
 bool init = false;
@@ -68,7 +71,7 @@ void seek_midi_event(jack_position_t pos)
     double current_midi_ticks = current_jack_ticks * midifile.getTicksPerQuarterNote() / pos.ticks_per_beat;
     printf("Seeking jack: %f midi:%f tpqn: %d tpb %f \n", current_jack_ticks, current_midi_ticks, midifile.getTicksPerQuarterNote(), pos.ticks_per_beat);
 
-    fprintf(stderr, "WARNING: track count must be 1. joinTrack must be called");
+    // fprintf(stderr, "WARNING: track count must be 1. joinTrack must be called");
 
     for(int track = 0; track < midifile.getTrackCount(); track++){
         for (int event = 0; event < midifile[track].size(); event++)
@@ -161,13 +164,20 @@ int process(jack_nframes_t nframes, void *)
         MidiEvent &msg = midifile[0][event_index];
         // convert midi to jack tpqn
         double next_jack_tick = msg.tick * pos.ticks_per_beat / midifile.getTicksPerQuarterNote();
+
+        //compute delta
+        while(next_jack_tick >= (pos.beats_per_bar * pos.ticks_per_beat))
+            next_jack_tick -= (pos.beats_per_bar * pos.ticks_per_beat);
         double delta_tick = next_jack_tick - current_jack_tick;
 
+        // printf("next: %0.20f current: %.20f %.20f\n",next_jack_tick, current_jack_tick, delta_tick);
+
         // handle loop boundaries
-        if (delta_tick < 0.0 && delta_tick > -1e-9)
+        if (std::abs(delta_tick) < 1e-6)
             delta_tick = 0.0;
-        else if(delta_tick < 0)
+        else if(delta_tick < 0.0)
             delta_tick += pos.ticks_per_beat * pos.beats_per_bar;
+        // printf("=> next: %0.20f current: %.20f %.20f\n",next_jack_tick, current_jack_tick, delta_tick);
 
 
         double delta_frame = delta_tick * frames_per_tick;
@@ -366,6 +376,7 @@ void load_midi_file(std::string file_path)
     midi_file_loaded = false;
     running = false;
 
+    //TODO: check that file exists
     midifile.read("/home/marius/.midi/" + file_path);
     // load_midi_test();
     midifile.doTimeAnalysis();
@@ -386,25 +397,15 @@ void load_midi_file(std::string file_path)
         cout << "Index\tTick\tSeconds\tDur\tMessage" << endl;
         for (int event = 0; event < midifile[track].size(); event++)
         {
-            if (midifile[track][event].isMeta() && midifile[track][event].getMetaType() == 0x03)
-            {
-                std::string trackName = midifile[track][event].getMetaContent();
-                if (!trackName.empty())
-                    cout << trackName << endl;
-            }
-
-            if (!midifile[track][event].isMetaMessage() && !midifile[track][event].isNoteOff())
-            {
-                cout << event;
-                cout << '\t' << dec << midifile[track][event].tick;
-                cout << '\t' << dec << midifile[track][event].seconds;
-                cout << '\t';
-                cout << midifile[track][event].getDurationInSeconds();
-                cout << '\t' << hex;
-                for (int i = 0; i < midifile[track][event].size(); i++)
-                    cout << (int)midifile[track][event][i] << ' ';
-                cout << endl;
-            }
+            cout << dec << event;
+            cout << '\t' << dec << midifile[track][event].tick;
+            cout << '\t' << dec << midifile[track][event].seconds;
+            cout << '\t';
+            cout << midifile[track][event].getDurationInSeconds();
+            cout << '\t' << hex;
+            for (int i = 0; i < midifile[track][event].size(); i++)
+                cout << (int)midifile[track][event][i] << ' ';
+            cout << endl;
         }
     }
     cout << "**********************" << endl;
@@ -546,7 +547,7 @@ int start(void)
     settings = new_fluid_settings();
     fluid_settings_setnum(settings, "synth.sample-rate", jack_get_sample_rate(m_jack_client));
     synth = new_fluid_synth(settings);
-    if (fluid_synth_sfload(synth, "/usr/share/sounds/sf2/FluidR3_GM.sf2", 1) == FLUID_FAILED)
+    if (fluid_synth_sfload(synth, SOUND_FONT, 1) == FLUID_FAILED)
     {
         std::cerr << "Cannot load SoundFont\n";
         return 1;
