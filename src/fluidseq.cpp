@@ -39,6 +39,7 @@ static jack_port_t *audio_output_port_l = nullptr;
 static jack_port_t *audio_output_port_r = nullptr;
 static fluid_settings_t *settings = nullptr;
 static fluid_synth_t *synth = nullptr;
+float volume_gain = 1.0;
 bool stopping = false;
 
 // transport master
@@ -58,7 +59,7 @@ bool m_osc_client_initialized = false;
 
 // position
 std::atomic<jack_nframes_t> play_frame{0};
-std::atomic<bool> running{false};
+std::atomic<bool> playing{false};
 
 void seek_midi_event(jack_position_t pos)
 {
@@ -102,7 +103,7 @@ void position_thread()
     while (!stopping)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        if(!running){
+        if(!playing){
             continue;
         }
         double ticks_per_second = midifile.getTicksPerQuarterNote() * current_bpm / 60.0;
@@ -121,18 +122,26 @@ void position_thread()
 
 int process(jack_nframes_t nframes, void *)
 {
+    float *left  = (float *)jack_port_get_buffer(audio_output_port_l, nframes);
+    float *right = (float *)jack_port_get_buffer(audio_output_port_r, nframes);
+    void *midi_buffer = jack_port_get_buffer(midi_output_port, nframes);
+
     if(stopping)
         return 0;
 
+    if(!playing){
+        jack_midi_clear_buffer(midi_buffer);
+        memset(left,  0, sizeof(jack_default_audio_sample_t) * nframes);
+        memset(right, 0, sizeof(jack_default_audio_sample_t) * nframes);
+        return 0;
+    }
     // do not run if midi file is not yet loaded
     if(!midi_file_loaded)
         return 0;
 
     jack_position_t pos;
     jack_transport_state_t state = jack_transport_query(m_jack_client, &pos);
-    float *left  = (float *)jack_port_get_buffer(audio_output_port_l, nframes);
-    float *right = (float *)jack_port_get_buffer(audio_output_port_r, nframes);
-    void *midi_buffer = jack_port_get_buffer(midi_output_port, nframes);
+
     jack_nframes_t period_start = pos.frame;
     jack_nframes_t period_end   = period_start + nframes;
 
@@ -141,14 +150,13 @@ int process(jack_nframes_t nframes, void *)
         return 0;
     }
 
-    jack_midi_clear_buffer(midi_buffer);
 
     if(!init || current_bpm != pos.beats_per_minute){
         // this will sync midi file to jack tick
         seek_midi_event(pos);
         init = true;
         current_bpm = pos.beats_per_minute;
-        running = true;
+        // playing = true;
     }
 
     // TODO = this works because we are the master!!!!!
@@ -188,7 +196,7 @@ int process(jack_nframes_t nframes, void *)
 
         if (offset >= 0)
         {
-            printf("index:%d beat:%d tick:%f offset=%d\n", event_index, pos.beat, pos.tick_double, offset);
+            // printf("index:%d beat:%d tick:%f offset=%d\n", event_index, pos.beat, pos.tick_double, offset);
             jack_midi_event_write(midi_buffer, offset, msg.data(), msg.size());
 
             //--------------------------------------------------------------
@@ -335,12 +343,29 @@ void set_bpm(int bpm)
     }
 }
 
-void set_state(int play){
+void set_state(bool state){
+    if(state && playing)
+        return;
+    else if(state)
+        playing = true;
+    else if(!state && !playing)
+        return;
+    else if(!state){
+        fluid_synth_all_sounds_off(synth, -1);
+        playing = false;
+    }
+}
 
+void set_mute(bool mute){
+    if(mute)
+        fluid_synth_set_gain(synth, 0.0);
+    else
+        fluid_synth_set_gain(synth, volume_gain);
 }
 
 void set_volume(int volume){
     fluid_synth_set_gain(synth, volume/10.0);
+    volume_gain = volume / 10.0;
 }
 
 void load_midi_test(){
@@ -374,7 +399,7 @@ void load_midi_file(std::string file_path)
 {
 
     midi_file_loaded = false;
-    running = false;
+    playing = false;
 
     //TODO: check that file exists
     midifile.read("/home/marius/.midi/" + file_path);
@@ -483,6 +508,8 @@ void init_osc(){
                                 { load_midi_file(&argv[0]->s); });
     m_osc_server->add_method("/sequencer/volume", "i", [](lo_arg **argv, int i)
                                 { set_volume(argv[0]->i); });
+    m_osc_server->add_method("/sequencer/mute", "i", [](lo_arg **argv, int i)
+                                { set_mute(argv[0]->i); });
     m_osc_server->start();
 
     m_osc_client = new lo::Address("localhost", 9998);
